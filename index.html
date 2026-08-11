@@ -44,6 +44,18 @@
         </div>
       </div>
 
+      <!-- STRUCTURAL INTEGRITY METER -->
+      <div class="hud-integrity-box" title="Overall Structural Stability">
+        <div class="integrity-header">
+          <span class="integrity-label">STRUCTURAL INTEGRITY</span>
+          <span class="integrity-status-badge stable" id="integrity-status-text">STABLE</span>
+        </div>
+        <div class="integrity-bar">
+          <div class="integrity-fill stable" id="integrity-fill" style="width: 100%;"></div>
+        </div>
+        <span class="integrity-val" id="integrity-val">100%</span>
+      </div>
+
       <div class="hud-controls">
         <button id="btn-audio-toggle" class="btn-icon" title="Toggle Audio">🔊</button>
         <button id="btn-help" class="btn-icon" title="Mission Briefing">❓</button>
@@ -55,10 +67,12 @@
       <!-- CANVAS GAME WORLD -->
       <div id="canvas-container">
         <canvas id="game-canvas"></canvas>
-        <div id="wind-indicator" class="wind-overlay hidden">
-          <span class="wind-icon">💨</span>
-          <span class="wind-text" id="wind-speed-text">WIND: 35 KM/H</span>
-          <div class="wind-bar"><div class="wind-fill" id="wind-bar-fill"></div></div>
+        <div id="hazard-banner" class="hazard-overlay hidden">
+          <span id="hazard-icon">💨</span>
+          <span id="hazard-text">WIND: STRONG (40 KM/H)</span>
+        </div>
+        <div id="restricted-warning" class="restricted-warning-overlay hidden">
+          ⚠️ RESTRICTED BUILDING ZONE — PLACEMENT FORBIDDEN
         </div>
         <div id="test-status-banner" class="status-overlay hidden">
           <span id="test-status-text">SIMULATING STRUCTURAL LOAD...</span>
@@ -204,7 +218,40 @@
           </div>
         </div>
         <div class="modal-footer">
-          <button id="btn-next-mission" class="btn-primary btn-large">NEXT MISSION ▶</button>
+          <button id="btn-next-mission" class="btn-primary btn-large">VIEW ENGINEERING FLASHCARD 📘</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3.5 EDUCATIONAL FLASHCARD MODAL -->
+    <div id="modal-flashcard" class="modal-backdrop hidden">
+      <div class="modal-card flashcard-card">
+        <div class="modal-header flashcard-header">
+          <span class="modal-tag">RESCUE ENGINEERING FLASHCARD</span>
+          <h2 id="fc-title">Truss Bridges & Compression/Tension Mechanics</h2>
+        </div>
+        <div class="modal-body">
+          <div class="fc-section">
+            <div class="fc-badge-title">
+              <span class="fc-icon" id="fc-icon">🌉</span>
+              <h3 id="fc-concept-name">Triangular Truss Structure</h3>
+            </div>
+            <p id="fc-concept-desc" class="fc-desc-text">Triangular trusses distribute downward forces into axial compression and tension across connected beams, preventing bending moments.</p>
+          </div>
+
+          <div class="fc-formula-box">
+            <span class="fc-formula-label">🧮 PHYSICS & STRESS FORMULA</span>
+            <div class="fc-formula-code" id="fc-formula-text">Stress σ = Force / Area  |  Strain ε = ΔL / L0</div>
+            <p id="fc-physics-desc" class="fc-desc-text">Gravity creates downward forces F_g = m · g. Diagonal members convert vertical shear into push (compression) and pull (tension) forces.</p>
+          </div>
+
+          <div class="fc-takeaway-box">
+            <span class="fc-takeaway-label">💡 RESCUE ENGINEERING LESSON</span>
+            <p id="fc-takeaway-text">Always form closed triangles with beams to stabilize nodes against joint rotation.</p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-continue-flashcard" class="btn-primary btn-large">CONTINUE TO NEXT MISSION ▶</button>
         </div>
       </div>
     </div>

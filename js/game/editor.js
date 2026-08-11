@@ -1,6 +1,7 @@
 /* ==========================================================================
    AFTER THE COLLAPSE — Construction & Editor Controller
-   Handles node/beam placement, snapping, deletion, undo stack, and material budget.
+   Handles node/beam placement, snapping, deletion, undo stack,
+   restricted zone validation, and mission auto-solve.
    ========================================================================== */
 
 import { MATERIAL_SPECS } from './missions.js';
@@ -23,11 +24,16 @@ export class Editor {
     this.snapPos = { x: 0, y: 0 };
     this.isDraggingBeam = false;
 
+    this.currentMission = null;
+    this.restrictedWarningActive = false;
+
     this.undoStack = [];
     this.onBudgetChange = null;
+    this.onRestrictedWarning = null;
   }
 
   setMission(mission) {
+    this.currentMission = mission;
     this.budget = { ...mission.budget };
     this.initialBudget = { ...mission.budget };
     this.usedBudget = { wood: 0, steel: 0 };
@@ -43,6 +49,27 @@ export class Editor {
     this.isDraggingBeam = false;
   }
 
+  isPointInRestrictedZone(x, y) {
+    if (!this.currentMission || !this.currentMission.restrictedZones) return false;
+    for (const rz of this.currentMission.restrictedZones) {
+      if (x >= rz.x && x <= rz.x + rz.width && y >= rz.y && y <= rz.y + rz.height) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  triggerRestrictedWarning() {
+    this.restrictedWarningActive = true;
+    soundEngine.playFail();
+    if (this.onRestrictedWarning) this.onRestrictedWarning(true);
+
+    setTimeout(() => {
+      this.restrictedWarningActive = false;
+      if (this.onRestrictedWarning) this.onRestrictedWarning(false);
+    }, 1500);
+  }
+
   getSnapPosition(x, y) {
     const grid = this.renderer.gridSize;
     const snapX = Math.round(x / grid) * grid;
@@ -52,8 +79,6 @@ export class Editor {
 
   handleMouseMove(x, y) {
     this.mousePos = { x, y };
-
-    // Check if hovering near an existing node
     this.hoverNode = this.physics.findNodeNear(x, y, 18);
 
     if (this.hoverNode) {
@@ -68,6 +93,11 @@ export class Editor {
   handleMouseDown(x, y) {
     this.handleMouseMove(x, y);
 
+    if (this.isPointInRestrictedZone(this.snapPos.x, this.snapPos.y) && this.activeTool !== 'delete') {
+      this.triggerRestrictedWarning();
+      return;
+    }
+
     if (this.activeTool === 'node') {
       if (!this.hoverNode) {
         const newNode = this.physics.addNode(this.snapPos.x, this.snapPos.y, false, false);
@@ -75,12 +105,10 @@ export class Editor {
         soundEngine.playNodePlace();
       }
     } else if (this.activeTool === 'wood' || this.activeTool === 'steel') {
-      // Start drag beam creation
       let fromNode = this.hoverNode;
       let createdStartNode = false;
 
       if (!fromNode) {
-        // Create new node at snap position
         fromNode = this.physics.addNode(this.snapPos.x, this.snapPos.y, false, false);
         createdStartNode = true;
       }
@@ -110,6 +138,13 @@ export class Editor {
 
     this.handleMouseMove(x, y);
 
+    if (this.isPointInRestrictedZone(this.snapPos.x, this.snapPos.y)) {
+      this.triggerRestrictedWarning();
+      this.isDraggingBeam = false;
+      this.startNode = null;
+      return;
+    }
+
     let toNode = this.hoverNode;
     let createdEndNode = false;
 
@@ -126,7 +161,6 @@ export class Editor {
       const dy = toNode.y - this.startNode.y;
       const len = Math.sqrt(dx * dx + dy * dy);
 
-      // Check constraints: max length & material budget
       if (len <= mat.maxLength && this.budget[matKey] > 0) {
         const beam = this.physics.addBeam(this.startNode, toNode, matKey);
         if (beam) {
@@ -141,11 +175,9 @@ export class Editor {
           soundEngine.playBeamPlace(matKey === 'steel');
           this.updateBudgetUI();
         } else if (createdEndNode) {
-          // Cleanup unused node
           this.physics.removeNode(toNode);
         }
       } else if (createdEndNode) {
-        // Exceeds max length or budget, remove temporary end node
         this.physics.removeNode(toNode);
       }
     } else if (createdEndNode) {
@@ -158,7 +190,6 @@ export class Editor {
 
   deleteNode(node) {
     if (node.isAnchor) return;
-
     const connectedBeams = this.physics.beams.filter(b => b.nodeA === node || b.nodeB === node);
     connectedBeams.forEach(b => this.refundBeam(b));
 
@@ -200,7 +231,6 @@ export class Editor {
   }
 
   resetStructure() {
-    // Keep only mission anchors, delete all user structures
     const userNodes = this.physics.nodes.filter(n => !n.isAnchor);
     userNodes.forEach(n => this.physics.removeNode(n));
 
@@ -218,20 +248,15 @@ export class Editor {
     this.resetStructure();
 
     const nodeMap = new Map();
-    // Map mission anchor nodes
     this.physics.nodes.forEach(n => {
-      if (n.isAnchor) {
-        nodeMap.set(n.id, n);
-      }
+      if (n.isAnchor) nodeMap.set(n.id, n);
     });
 
-    // Add solution nodes
     solution.nodes.forEach(sn => {
       const node = this.physics.addNode(sn.x, sn.y, false, false, sn.id);
       nodeMap.set(sn.id, node);
     });
 
-    // Add solution beams
     solution.beams.forEach(sb => {
       const nodeA = nodeMap.get(sb.from);
       const nodeB = nodeMap.get(sb.to);
@@ -271,7 +296,8 @@ export class Editor {
     const dy = this.snapPos.y - this.startNode.y;
     const len = Math.sqrt(dx * dx + dy * dy);
 
-    const isValid = len <= mat.maxLength && this.budget[matKey] > 0 && len > 5;
+    const isRestricted = this.isPointInRestrictedZone(this.snapPos.x, this.snapPos.y);
+    const isValid = len <= mat.maxLength && this.budget[matKey] > 0 && len > 5 && !isRestricted;
     this.renderer.drawBuildPreview(this.startNode, this.snapPos, matKey, isValid, len);
   }
 }

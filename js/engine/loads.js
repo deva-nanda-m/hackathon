@@ -1,5 +1,5 @@
 /* ==========================================================================
-   AFTER THE COLLAPSE — Dynamic Loads, Vehicle & Particle System
+   AFTER THE COLLAPSE — Dynamic Loads, Environmental Hazards & Debris Engine
    ========================================================================== */
 
 export class SupplyCrate {
@@ -16,7 +16,6 @@ export class SupplyCrate {
     this.state = 'idle'; // 'idle', 'moving', 'goal', 'falling'
     this.width = 28;
     this.height = 20;
-    this.currentDeckNode = null;
   }
 
   reset() {
@@ -25,7 +24,6 @@ export class SupplyCrate {
     this.vy = 0;
     this.active = false;
     this.state = 'idle';
-    this.currentDeckNode = null;
   }
 
   start() {
@@ -40,18 +38,17 @@ export class SupplyCrate {
     if (this.state === 'moving') {
       this.x += this.speed * dt;
 
-      // Check if crate reached end platform cliff
+      // Reached goal cliff
       if (this.x >= this.endX) {
         this.x = this.endX;
         this.state = 'goal';
         return;
       }
 
-      // Find nearest deck beam or deck node underneath crate
+      // Find nearest deck beam or node underneath crate
       let supported = false;
       let targetY = this.deckY - 14;
 
-      // Look for deck beams directly beneath crate.x
       for (const beam of beams) {
         if (beam.broken) continue;
         const p1 = beam.nodeA;
@@ -60,10 +57,8 @@ export class SupplyCrate {
         const maxX = Math.max(p1.x, p2.x);
 
         if (this.x >= minX - 5 && this.x <= maxX + 5) {
-          // Interpolate Y height on beam
           const t = (this.x - minX) / (maxX - minX || 1);
           const beamY = p1.x < p2.x ? p1.y + t * (p2.y - p1.y) : p2.y + t * (p1.y - p2.y);
-
           targetY = beamY - 14;
           supported = true;
           break;
@@ -71,10 +66,8 @@ export class SupplyCrate {
       }
 
       if (supported) {
-        // Smoothly follow bridge flex height
         this.y += (targetY - this.y) * 0.3;
       } else {
-        // Bridge deck missing or broken! Crate falls into abyss
         this.state = 'falling';
       }
     } else if (this.state === 'falling') {
@@ -88,10 +81,9 @@ export class SupplyCrate {
     }
   }
 
-  applyForceToDeck(nodes, beams) {
+  applyForceToDeck(nodes) {
     if (this.state !== 'moving') return;
 
-    // Distribute crate weight to nodes closest to crate.x
     for (const node of nodes) {
       if (node.fixed) continue;
       const dx = Math.abs(node.x - this.x);
@@ -103,6 +95,74 @@ export class SupplyCrate {
   }
 }
 
+// FALLING DEBRIS MANAGER
+export class FallingDebrisManager {
+  constructor() {
+    this.items = [];
+    this.timer = 0;
+  }
+
+  reset() {
+    this.items = [];
+    this.timer = 0;
+  }
+
+  update(dt, interval, nodes, beams, particles) {
+    this.timer += dt;
+    if (this.timer >= interval) {
+      this.timer = 0;
+      // Spawn new falling debris block from top
+      const spawnX = 220 + Math.random() * 400;
+      this.items.push({
+        x: spawnX,
+        y: -30,
+        width: 18,
+        height: 18,
+        vy: 180 + Math.random() * 80,
+        impacted: false
+      });
+    }
+
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      const d = this.items[i];
+      d.y += d.vy * dt;
+
+      // Check collision with nodes and beams
+      if (!d.impacted) {
+        for (const node of nodes) {
+          if (node.fixed) continue;
+          const dx = node.x - d.x;
+          const dy = node.y - d.y;
+          if (Math.sqrt(dx * dx + dy * dy) < 22) {
+            // Strike node! Apply downward impact impulse
+            node.vy += 160;
+            d.impacted = true;
+            if (particles) particles.createSparks(d.x, d.y, '#f97316', 12);
+            break;
+          }
+        }
+      }
+
+      if (d.y > 600 || d.impacted) {
+        this.items.splice(i, 1);
+      }
+    }
+  }
+
+  draw(ctx) {
+    ctx.save();
+    for (const d of this.items) {
+      ctx.fillStyle = '#64748b';
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 2;
+      ctx.fillRect(d.x - d.width / 2, d.y - d.height / 2, d.width, d.height);
+      ctx.strokeRect(d.x - d.width / 2, d.y - d.height / 2, d.width, d.height);
+    }
+    ctx.restore();
+  }
+}
+
+// PARTICLE SYSTEM
 export class ParticleSystem {
   constructor() {
     this.particles = [];
@@ -154,7 +214,7 @@ export class ParticleSystem {
       p.life -= p.decay * dt;
 
       if (!p.isWind) {
-        p.vy += 200 * dt; // gravity on sparks
+        p.vy += 200 * dt;
       }
 
       if (p.life <= 0) {

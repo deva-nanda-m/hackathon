@@ -1,10 +1,11 @@
 /* ==========================================================================
-   AFTER THE COLLAPSE — State Machine & Game Coordinator
-   Manages game state flow: BRIEFING -> BUILD -> TESTING -> SUCCESS / FAILURE
+   AFTER THE COLLAPSE — Expanded State Machine & Campaign Coordinator
+   Manages 7-mission flow, dynamic test phase events, rising flood water,
+   falling debris, structural integrity checks, and mission objectives.
    ========================================================================== */
 
 import { MISSIONS } from './missions.js';
-import { SupplyCrate, ParticleSystem } from '../engine/loads.js';
+import { SupplyCrate, FallingDebrisManager, ParticleSystem } from '../engine/loads.js';
 import { soundEngine } from './audio.js';
 
 export class StateMachine {
@@ -16,22 +17,28 @@ export class StateMachine {
 
     this.currentMissionIndex = 0;
     this.currentMission = MISSIONS[0];
-    this.state = 'BRIEFING'; // 'BRIEFING', 'BUILD', 'TESTING', 'SUCCESS', 'FAILURE'
+    this.state = 'BRIEFING';
 
     this.testElapsedTime = 0;
     this.crate = null;
+    this.debrisManager = new FallingDebrisManager();
     this.particles = new ParticleSystem();
 
+    this.currentWaterY = 560;
     this.survivorHoldTimer = 0;
+    this.towerHoldTimer = 0;
   }
 
   init(editor, ui) {
     this.editor = editor;
     this.ui = ui;
 
-    // Attach callbacks
     this.editor.onBudgetChange = (budgetData) => {
       this.ui.updateHUD(this.currentMission, budgetData);
+    };
+
+    this.editor.onRestrictedWarning = (visible) => {
+      this.ui.showRestrictedWarning(visible);
     };
 
     this.physics.onBeamBreak = (beam) => {
@@ -60,13 +67,14 @@ export class StateMachine {
     this.currentMission = mission;
     this.physics.reset();
     this.particles.reset();
+    this.debrisManager.reset();
+    this.currentWaterY = mission.terrain.waterY;
 
-    // Create fixed mission anchors
+    // Create fixed anchors
     mission.anchors.forEach(a => {
       this.physics.addNode(a.x, a.y, true, true, a.id);
     });
 
-    // Create crate vehicle if needed
     if (mission.hasCrate) {
       this.crate = new SupplyCrate(
         mission.terrain.leftCliffX,
@@ -97,17 +105,18 @@ export class StateMachine {
       this.ui.showBriefingModal(this.currentMission);
     } else if (newState === 'BUILD') {
       this.physics.isSimulating = false;
+      this.currentWaterY = this.currentMission.terrain.waterY;
       this.ui.updateTestUI(false, 0, this.currentMission.testDuration);
+      this.ui.updateIntegrityMeter(100);
     } else if (newState === 'TESTING') {
       this.physics.isSimulating = true;
       this.testElapsedTime = 0;
       this.survivorHoldTimer = 0;
+      this.towerHoldTimer = 0;
+      this.currentWaterY = this.currentMission.terrain.waterY;
       this.physics.failedBeamInfo = null;
 
-      if (this.crate) {
-        this.crate.start();
-      }
-
+      if (this.crate) this.crate.start();
       this.ui.updateTestUI(true, 0, this.currentMission.testDuration);
     } else if (newState === 'SUCCESS') {
       this.physics.isSimulating = false;
@@ -136,7 +145,6 @@ export class StateMachine {
   }
 
   startTest() {
-    // Basic verification: structure must have at least 1 user beam
     if (this.physics.beams.length === 0) {
       alert('Construct at least one beam connecting anchors before testing!');
       return;
@@ -145,18 +153,16 @@ export class StateMachine {
   }
 
   stopTest(reason = 'EDIT') {
-    if (reason === 'FAIL') {
-      this.setState('FAILURE');
-    } else if (reason === 'WIN') {
-      this.setState('SUCCESS');
-    } else {
-      this.setState('BUILD');
-    }
+    if (reason === 'FAIL') this.setState('FAILURE');
+    else if (reason === 'WIN') this.setState('SUCCESS');
+    else this.setState('BUILD');
   }
 
   update(dt, time) {
-    // Always update visual particles
-    if (this.currentMission.windStrength > 0) {
+    const m = this.currentMission;
+
+    // Environmental wind particles
+    if (m.windStrength > 0) {
       this.particles.createWindParticles(this.renderer.canvas.width / this.renderer.dpr, this.renderer.canvas.height / this.renderer.dpr);
     }
     this.particles.update(dt);
@@ -164,37 +170,74 @@ export class StateMachine {
     if (this.state !== 'TESTING') return;
 
     this.testElapsedTime += dt;
-    this.ui.updateTestUI(true, this.testElapsedTime, this.currentMission.testDuration);
+    this.ui.updateTestUI(true, this.testElapsedTime, m.testDuration);
 
-    // 1. Run physics step
-    this.physics.update(dt, this.currentMission.windStrength, this.crate);
+    // 1. Handle Rising Water Level Hazard
+    if (m.risingWater) {
+      this.currentWaterY -= (m.waterRiseSpeed || 5.0) * dt;
+    }
 
-    // Play strain groan sounds occasionally under high stress
+    // 2. Handle Falling Debris Hazard
+    if (m.hasDebris) {
+      this.debrisManager.update(dt, m.debrisInterval || 2.5, this.physics.nodes, this.physics.beams, this.particles);
+    }
+
+    // 3. Update Physics engine with Fire, Earthquake & Wind
+    this.physics.update(dt, m.windStrength, this.crate, m, this.testElapsedTime);
+
+    // 4. Update Structural Integrity Meter
+    const integrity = this.physics.getStructuralIntegrity();
+    this.ui.updateIntegrityMeter(integrity);
+
+    if (integrity <= 14) {
+      this.stopTest('FAIL');
+      return;
+    }
+
+    // Play groan sounds on high stress
     if (Math.random() < 0.05 && this.physics.getMaxStress() > 0.6) {
       soundEngine.playGroan(this.physics.getMaxStress());
     }
 
-    // 2. Update supply crate vehicle if present
+    // 5. Update Supply Crate vehicle if present
     if (this.crate) {
-      this.crate.update(dt, this.physics.nodes, this.physics.beams, this.currentMission.terrain.waterY);
-
+      this.crate.update(dt, this.physics.nodes, this.physics.beams, this.currentWaterY);
       if (this.crate.state === 'falling') {
         this.stopTest('FAIL');
         return;
       }
     }
 
-    // 3. Check failure condition (structure collapse into ravine)
-    if (this.physics.isStructureCollapsed(this.currentMission.terrain.waterY)) {
+    // 6. Check structural collapse into water
+    if (this.physics.isStructureCollapsed(this.currentWaterY)) {
       this.stopTest('FAIL');
       return;
     }
 
-    // 4. Check Mission Specific Win Conditions
-    const m = this.currentMission;
+    // 7. Check Mission Specific Win Conditions
+    if (m.isTowerMission) {
+      // Mission 4: Vertical Rescue Tower reaches Y <= targetHeightY (200)
+      const targetY = m.targetHeightY || 200;
+      let reachedHeight = false;
+      for (const node of this.physics.nodes) {
+        if (!node.fixed && node.y <= targetY + 15) {
+          reachedHeight = true;
+          break;
+        }
+      }
 
-    if (m.hasSurvivor) {
-      // Mission 3: platform must reach survivor position (within 35px) and hold position
+      if (reachedHeight) {
+        this.towerHoldTimer += dt;
+        if (this.towerHoldTimer >= m.testDuration) {
+          this.stopTest('WIN');
+          return;
+        }
+      } else if (this.testElapsedTime >= m.testDuration + 2.0) {
+        this.stopTest('FAIL');
+        return;
+      }
+    } else if (m.hasSurvivor) {
+      // Mission 3: Cantilever reaches survivor position
       const survivorPos = m.survivorPos;
       let reached = false;
       for (const node of this.physics.nodes) {
@@ -213,18 +256,17 @@ export class StateMachine {
           return;
         }
       } else if (this.testElapsedTime >= m.testDuration + 2.0) {
-        // Did not reach survivor in time
         this.stopTest('FAIL');
         return;
       }
     } else if (m.hasCrate) {
-      // Mission 2, 4, 5: Crate must safely cross to right cliff
+      // Missions 2, 5, 6, 7: Crate reaches destination
       if (this.crate && this.crate.state === 'goal') {
         this.stopTest('WIN');
         return;
       }
     } else {
-      // Mission 1: Hold self weight for full testDuration
+      // Mission 1: Hold self weight for full duration
       if (this.testElapsedTime >= m.testDuration) {
         this.stopTest('WIN');
         return;
@@ -233,36 +275,50 @@ export class StateMachine {
   }
 
   draw(width, height, time) {
-    // 1. Draw Terrain & Environment
-    this.renderer.drawTerrain(this.currentMission, width, height, time);
+    const m = this.currentMission;
 
-    // 2. Draw Construction Grid (only during BUILD)
+    // 1. Draw Terrain, Rising Water & Environment
+    this.renderer.drawTerrain(m, width, height, time, this.currentWaterY);
+
+    // 2. Draw Fire Zones & Restricted Building Areas
+    this.renderer.drawHazardsAndRestrictedZones(m, time);
+
+    // 3. Draw Helicopter Pad Target (Mission 4 Rescue Tower)
+    if (m.isTowerMission) {
+      this.renderer.drawTowerTarget(m, time);
+    }
+
+    // 4. Draw Grid
     if (this.state === 'BUILD') {
       this.renderer.drawGrid(width, height);
     }
 
-    // 3. Draw Beams & Stress Heatmaps
+    // 5. Draw Beams & Stress Heatmaps & Failed Beam Callout
     const isTesting = this.state === 'TESTING' || this.state === 'FAILURE';
-    this.renderer.drawBeams(this.physics.beams, isTesting);
+    const failedBeam = this.state === 'FAILURE' ? this.physics.failedBeamObject : null;
+    this.renderer.drawBeams(this.physics.beams, isTesting, failedBeam);
 
-    // 4. Draw Joint Nodes
+    // 6. Draw Joint Nodes
     const activeNode = this.state === 'BUILD' ? this.editor.hoverNode : null;
     this.renderer.drawNodes(this.physics.nodes, activeNode);
 
-    // 5. Draw Crate / Survivor
-    if (this.currentMission.hasSurvivor) {
-      this.renderer.drawSurvivor(this.currentMission.survivorPos, time);
+    // 7. Draw Crate / Survivor / Falling Debris
+    if (m.hasSurvivor) {
+      this.renderer.drawSurvivor(m.survivorPos, time);
     }
     if (this.crate) {
       this.renderer.drawCrate(this.crate);
     }
+    if (m.hasDebris && this.state === 'TESTING') {
+      this.debrisManager.draw(this.renderer.ctx);
+    }
 
-    // 6. Draw Construction Line Preview
+    // 8. Draw Construction Line Preview
     if (this.state === 'BUILD') {
       this.editor.drawPreview();
     }
 
-    // 7. Draw Visual Particles & Sparks
+    // 9. Draw Particles & Sparks
     this.particles.draw(this.renderer.ctx);
   }
 }

@@ -1,6 +1,6 @@
 /* ==========================================================================
    AFTER THE COLLAPSE — UI & Modal Controller
-   Manages DOM interactions, HUD budget counters, diagnostic popups, and keyboard shortcuts.
+   Manages Structural Integrity meter, environmental hazard HUD, modal cards, and hotkeys.
    ========================================================================== */
 
 import { soundEngine } from './audio.js';
@@ -17,18 +17,28 @@ export class UIController {
     this.hudMissionTitle = document.getElementById('hud-mission-title');
     this.objectiveText = document.getElementById('objective-text');
 
+    // Structural Integrity Meter
+    this.integrityStatusText = document.getElementById('integrity-status-text');
+    this.integrityFill = document.getElementById('integrity-fill');
+    this.integrityVal = document.getElementById('integrity-val');
+
+    // Hazard & Restricted Overlays
+    this.hazardBanner = document.getElementById('hazard-banner');
+    this.hazardIcon = document.getElementById('hazard-icon');
+    this.hazardText = document.getElementById('hazard-text');
+    this.restrictedWarning = document.getElementById('restricted-warning');
+
+    // Tool & Action Buttons
     this.toolButtons = document.querySelectorAll('.tool-btn');
     this.btnTest = document.getElementById('btn-test');
     this.btnTestText = document.getElementById('btn-test-text');
     this.btnUndo = document.getElementById('btn-undo');
     this.btnReset = document.getElementById('btn-reset');
+    this.btnAutoSolve = document.getElementById('btn-auto-solve');
     this.btnAudioToggle = document.getElementById('btn-audio-toggle');
     this.btnHelp = document.getElementById('btn-help');
 
-    // Overlays
-    this.windIndicator = document.getElementById('wind-indicator');
-    this.windSpeedText = document.getElementById('wind-speed-text');
-    this.windBarFill = document.getElementById('wind-bar-fill');
+    // Canvas Overlays
     this.testStatusBanner = document.getElementById('test-status-banner');
     this.testStatusText = document.getElementById('test-status-text');
     this.testTimer = document.getElementById('test-timer');
@@ -37,6 +47,7 @@ export class UIController {
     this.modalBriefing = document.getElementById('modal-briefing');
     this.modalFailure = document.getElementById('modal-failure');
     this.modalSuccess = document.getElementById('modal-success');
+    this.modalFlashcard = document.getElementById('modal-flashcard');
     this.modalVictory = document.getElementById('modal-victory');
 
     // Modal Content
@@ -55,11 +66,20 @@ export class UIController {
     this.statMaxStrain = document.getElementById('stat-max-strain');
     this.statTotalCost = document.getElementById('stat-total-cost');
 
+    // Flashcard Content
+    this.fcTitle = document.getElementById('fc-title');
+    this.fcIcon = document.getElementById('fc-icon');
+    this.fcConceptName = document.getElementById('fc-concept-name');
+    this.fcConceptDesc = document.getElementById('fc-concept-desc');
+    this.fcFormulaText = document.getElementById('fc-formula-text');
+    this.fcPhysicsDesc = document.getElementById('fc-physics-desc');
+    this.fcTakeawayText = document.getElementById('fc-takeaway-text');
+    this.btnContinueFlashcard = document.getElementById('btn-continue-flashcard');
+
     this.initEventListeners();
   }
 
   initEventListeners() {
-    // Tool Selection
     this.toolButtons.forEach(btn => {
       btn.addEventListener('click', () => {
         const tool = btn.dataset.tool;
@@ -68,7 +88,6 @@ export class UIController {
       });
     });
 
-    // Test Button
     this.btnTest.addEventListener('click', () => {
       soundEngine.playClick();
       if (this.sm.state === 'BUILD') {
@@ -78,21 +97,15 @@ export class UIController {
       }
     });
 
-    // Undo & Reset
     this.btnUndo.addEventListener('click', () => {
-      if (this.sm.state === 'BUILD') {
-        this.sm.editor.undo();
-      }
+      if (this.sm.state === 'BUILD') this.sm.editor.undo();
     });
 
     this.btnReset.addEventListener('click', () => {
       soundEngine.playClick();
-      if (this.sm.state === 'BUILD') {
-        this.sm.editor.resetStructure();
-      }
+      if (this.sm.state === 'BUILD') this.sm.editor.resetStructure();
     });
 
-    this.btnAutoSolve = document.getElementById('btn-auto-solve');
     this.btnAutoSolve.addEventListener('click', () => {
       soundEngine.playClick();
       if (this.sm.state === 'BUILD') {
@@ -100,19 +113,17 @@ export class UIController {
       }
     });
 
-    // Audio toggle
     this.btnAudioToggle.addEventListener('click', () => {
       const enabled = soundEngine.toggle();
       this.btnAudioToggle.textContent = enabled ? '🔊' : '🔇';
     });
 
-    // Help / Briefing button
     this.btnHelp.addEventListener('click', () => {
       soundEngine.playClick();
       this.showBriefingModal();
     });
 
-    // Modal Action Buttons
+    // Modal Actions
     document.getElementById('btn-start-mission').addEventListener('click', () => {
       soundEngine.playClick();
       this.hideAllModals();
@@ -134,9 +145,16 @@ export class UIController {
 
     document.getElementById('btn-next-mission').addEventListener('click', () => {
       soundEngine.playClick();
-      this.hideAllModals();
-      this.sm.nextMission();
+      this.showFlashcardModal(this.sm.currentMission);
     });
+
+    if (this.btnContinueFlashcard) {
+      this.btnContinueFlashcard.addEventListener('click', () => {
+        soundEngine.playClick();
+        this.hideAllModals();
+        this.sm.nextMission();
+      });
+    }
 
     document.getElementById('btn-restart-game').addEventListener('click', () => {
       soundEngine.playClick();
@@ -144,7 +162,7 @@ export class UIController {
       this.sm.startCampaign();
     });
 
-    // Keyboard Shortcuts [1, 2, 3, 4, Space, Z, R]
+    // Keyboard Shortcuts [1, 2, 3, 4, Space, Z, R, A]
     window.addEventListener('keydown', (e) => {
       if (e.key === '1') this.selectTool('node');
       else if (e.key === '2') this.selectTool('wood');
@@ -158,6 +176,8 @@ export class UIController {
         this.sm.editor.undo();
       } else if (e.key.toLowerCase() === 'r' && this.sm.state === 'BUILD') {
         this.sm.editor.resetStructure();
+      } else if (e.key.toLowerCase() === 'a' && this.sm.state === 'BUILD') {
+        this.btnAutoSolve.click();
       }
     });
   }
@@ -180,13 +200,51 @@ export class UIController {
       this.totalCostVal.textContent = `$${budgetData.totalCost}`;
     }
 
-    if (mission.windStrength > 0) {
-      this.windIndicator.classList.remove('hidden');
-      this.windSpeedText.textContent = `WIND: ${mission.windStrength} KM/H`;
-      this.windBarFill.style.width = `${Math.min(100, mission.windStrength * 2)}%`;
+    // Hazard HUD Banner
+    if (mission.windStrength > 0 || mission.hasFireZone || mission.risingWater || mission.hasDebris) {
+      this.hazardBanner.classList.remove('hidden');
+      let hazardStr = mission.hazardText;
+      let iconStr = '⚠️';
+      if (mission.windStrength > 0) iconStr = '💨';
+      else if (mission.hasFireZone) iconStr = '🔥';
+      else if (mission.risingWater) iconStr = '🌊';
+      else if (mission.hasDebris) iconStr = '☄️';
+
+      this.hazardIcon.textContent = iconStr;
+      this.hazardText.textContent = hazardStr;
     } else {
-      this.windIndicator.classList.add('hidden');
+      this.hazardBanner.classList.add('hidden');
     }
+
+    this.updateIntegrityMeter(100);
+  }
+
+  updateIntegrityMeter(healthPercent) {
+    const hp = Math.max(0, Math.min(100, Math.round(healthPercent)));
+    this.integrityVal.textContent = `${hp}%`;
+    this.integrityFill.style.width = `${hp}%`;
+
+    let stateClass = 'stable';
+    let stateText = 'STABLE';
+
+    if (hp >= 70) {
+      stateClass = 'stable'; stateText = 'STABLE';
+    } else if (hp >= 40) {
+      stateClass = 'warning'; stateText = 'WARNING';
+    } else if (hp >= 15) {
+      stateClass = 'critical'; stateText = 'CRITICAL';
+    } else {
+      stateClass = 'collapse'; stateText = 'COLLAPSE';
+    }
+
+    this.integrityStatusText.textContent = stateText;
+    this.integrityStatusText.className = `integrity-status-badge ${stateClass}`;
+    this.integrityFill.className = `integrity-fill ${stateClass}`;
+  }
+
+  showRestrictedWarning(visible = true) {
+    if (visible) this.restrictedWarning.classList.remove('hidden');
+    else this.restrictedWarning.classList.add('hidden');
   }
 
   updateTestUI(isTesting, elapsed, maxTime) {
@@ -222,20 +280,21 @@ export class UIController {
   showFailureModal(failedInfo) {
     this.hideAllModals();
     if (failedInfo) {
-      this.failCauseTitle.textContent = `${failedInfo.materialName} Failed Under Stress`;
-      this.failCauseDesc.textContent = `Beam experienced ${failedInfo.cause.toLowerCase()} at ${failedInfo.stressVal}% of its material breaking limit, triggering structural collapse.`;
+      this.failCauseTitle.textContent = `${failedInfo.materialName} Failed Under ${failedInfo.cause}`;
+      this.failCauseDesc.textContent = `Beam experienced ${failedInfo.stressVal}% strain stress (Material limit: ${failedInfo.strengthVal || 100}%), triggering structural collapse.`;
     } else {
-      this.failCauseTitle.textContent = 'Structure Collapsed Into Ravine';
-      this.failCauseDesc.textContent = 'The bridge could not withstand structural loads and dropped below safety height.';
+      this.failCauseTitle.textContent = 'Structure Collapsed Into Ravine / Flood';
+      this.failCauseDesc.textContent = 'The bridge/platform dropped below safety height due to excessive displacement or flood water.';
     }
 
-    // Dynamic engineering advice
     if (failedInfo && failedInfo.cause.includes('Compression')) {
       this.failAdviceText.textContent = 'Compression failure! Add triangular cross-bracing to distribute weight or upgrade high-compression members to Steel.';
     } else if (failedInfo && failedInfo.cause.includes('Tension')) {
-      this.failAdviceText.textContent = 'Tension snap! Anchor upper tension chords with Steel beams or shorten beam spans.';
+      this.failAdviceText.textContent = 'Tension snap! Anchor upper chords with Steel beams or shorten single-beam spans.';
+    } else if (failedInfo && failedInfo.cause.includes('Fire')) {
+      this.failAdviceText.textContent = 'Fire degradation! Build structure higher to pass above active fire zones or use Steel.';
     } else {
-      this.failAdviceText.textContent = 'Add diagonal support beams from bottom cliff anchors up to the center of the deck.';
+      this.failAdviceText.textContent = 'Add diagonal support beams from bedrock anchors up to the deck nodes.';
     }
 
     soundEngine.playFail();
@@ -252,6 +311,26 @@ export class UIController {
     this.modalSuccess.classList.remove('hidden');
   }
 
+  showFlashcardModal(mission) {
+    const fc = mission ? mission.flashcard : null;
+    if (!fc) {
+      this.hideAllModals();
+      this.sm.nextMission();
+      return;
+    }
+
+    this.hideAllModals();
+    this.fcTitle.textContent = fc.title;
+    this.fcIcon.textContent = fc.icon || '🌉';
+    this.fcConceptName.textContent = fc.conceptName;
+    this.fcConceptDesc.textContent = fc.conceptDesc;
+    this.fcFormulaText.textContent = fc.formulaText;
+    this.fcPhysicsDesc.textContent = fc.physicsDesc;
+    this.fcTakeawayText.textContent = fc.takeaway;
+
+    this.modalFlashcard.classList.remove('hidden');
+  }
+
   showVictoryModal() {
     this.hideAllModals();
     soundEngine.playSuccess();
@@ -262,6 +341,7 @@ export class UIController {
     this.modalBriefing.classList.add('hidden');
     this.modalFailure.classList.add('hidden');
     this.modalSuccess.classList.add('hidden');
+    this.modalFlashcard.classList.add('hidden');
     this.modalVictory.classList.add('hidden');
   }
 }

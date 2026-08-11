@@ -1,7 +1,7 @@
 /* ==========================================================================
-   AFTER THE COLLAPSE — 2D Structural Physics Engine
-   Uses Verlet integration with distance constraint relaxation and
-   material stress/strain limit detection.
+   AFTER THE COLLAPSE — Expanded 2D Structural Physics Engine
+   Integrated relaxation solver, fire degradation, earthquake tremors,
+   and Structural Integrity calculation.
    ========================================================================== */
 
 import { MATERIAL_SPECS } from '../game/missions.js';
@@ -11,9 +11,10 @@ export class PhysicsEngine {
     this.nodes = [];
     this.beams = [];
     this.gravity = 350; // px/s^2
-    this.subSteps = 16;  // Constraint solver iterations per frame
-    this.damping = 0.98; // Motion damping
+    this.subSteps = 16;
+    this.damping = 0.98;
     this.failedBeamInfo = null;
+    this.failedBeamObject = null; // Pointer to broken beam for canvas highlighting
     this.isSimulating = false;
 
     // Callbacks
@@ -25,6 +26,7 @@ export class PhysicsEngine {
     this.nodes = [];
     this.beams = [];
     this.failedBeamInfo = null;
+    this.failedBeamObject = null;
     this.isSimulating = false;
   }
 
@@ -51,7 +53,6 @@ export class PhysicsEngine {
   }
 
   addBeam(nodeA, nodeB, materialKey = 'wood') {
-    // Check if beam already exists between these nodes
     const existing = this.beams.find(b =>
       !b.broken &&
       ((b.nodeA === nodeA && b.nodeB === nodeB) || (b.nodeA === nodeB && b.nodeB === nodeA))
@@ -71,10 +72,10 @@ export class PhysicsEngine {
       material: mat,
       restLength: restLength,
       currentLength: restLength,
-      stress: 0, // 0.0 to 1.0+
-      stressType: 'normal', // 'compression' or 'tension'
+      stress: 0,
+      stressType: 'normal',
       broken: false,
-      breakProgress: 0 // for break animation spark
+      inFire: false
     };
 
     nodeA.connectedBeams.add(beam.id);
@@ -84,23 +85,17 @@ export class PhysicsEngine {
   }
 
   removeNode(node) {
-    // Remove all connected beams
     const beamsToRemove = this.beams.filter(b => b.nodeA === node || b.nodeB === node);
     beamsToRemove.forEach(b => this.removeBeam(b));
-
     const idx = this.nodes.indexOf(node);
-    if (idx !== -1) {
-      this.nodes.splice(idx, 1);
-    }
+    if (idx !== -1) this.nodes.splice(idx, 1);
   }
 
   removeBeam(beam) {
     if (beam.nodeA) beam.nodeA.connectedBeams.delete(beam.id);
     if (beam.nodeB) beam.nodeB.connectedBeams.delete(beam.id);
     const idx = this.beams.indexOf(beam);
-    if (idx !== -1) {
-      this.beams.splice(idx, 1);
-    }
+    if (idx !== -1) this.beams.splice(idx, 1);
   }
 
   findNodeNear(x, y, radius = 20) {
@@ -126,8 +121,6 @@ export class PhysicsEngine {
       if (beam.broken) continue;
       const p1 = beam.nodeA;
       const p2 = beam.nodeB;
-
-      // Distance from point (x,y) to line segment p1-p2
       const l2 = (p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2;
       if (l2 === 0) continue;
 
@@ -146,11 +139,8 @@ export class PhysicsEngine {
     return closestBeam;
   }
 
-  // Pre-calculate node masses based on connected beam materials & load
   updateNodeMasses() {
-    for (const node of this.nodes) {
-      node.mass = 1.0; // Base node mass
-    }
+    for (const node of this.nodes) node.mass = 1.0;
     for (const beam of this.beams) {
       if (beam.broken) continue;
       const beamMass = beam.restLength * 0.01 * beam.material.weight;
@@ -159,47 +149,69 @@ export class PhysicsEngine {
     }
   }
 
-  // Primary physics simulation step
-  update(dt, windStrength = 0, crateLoad = null) {
+  // Calculate overall Structural Integrity percentage [0% - 100%]
+  getStructuralIntegrity() {
+    if (this.beams.length === 0) return 100;
+
+    let unbrokenCount = 0;
+    let totalStressSum = 0;
+
+    for (const b of this.beams) {
+      if (b.broken) continue;
+      unbrokenCount++;
+      totalStressSum += Math.min(1.0, b.stress);
+    }
+
+    if (this.beams.length === 0 || unbrokenCount === 0) return 0;
+
+    const brokenRatio = unbrokenCount / this.beams.length;
+    const avgStress = totalStressSum / unbrokenCount;
+    const health = Math.max(0, Math.min(100, Math.round((brokenRatio * (1.0 - avgStress * 0.6)) * 100)));
+    return health;
+  }
+
+  // Main simulation update loop
+  update(dt, windStrength = 0, crateLoad = null, missionObj = null, simTime = 0) {
     if (!this.isSimulating) return;
 
     this.updateNodeMasses();
 
+    // 0. Handle Earthquake Tremor (oscillation of anchors)
+    if (missionObj && missionObj.hasEarthquake) {
+      const quakeOffset = Math.sin(simTime * 15) * 4.5;
+      for (const node of this.nodes) {
+        if (node.fixed) {
+          node.x = node.anchorX + quakeOffset;
+        }
+      }
+    }
+
     const dtSub = dt / this.subSteps;
 
     for (let step = 0; step < this.subSteps; step++) {
-      // 1. Reset forces & apply gravity + wind
+      // 1. Force accumulation
       for (const node of this.nodes) {
         if (node.fixed) continue;
         node.fx = 0;
         node.fy = node.mass * this.gravity;
 
-        // Apply wind force
         if (windStrength !== 0) {
-          const gust = 1.0 + Math.sin(Date.now() * 0.005 + node.x * 0.01) * 0.3;
+          const gust = 1.0 + Math.sin(simTime * 5 + node.x * 0.01) * 0.35;
           node.fx += windStrength * 2.5 * gust;
         }
       }
 
-      // Apply crate load weight to deck nodes if crate is active
       if (crateLoad && crateLoad.active) {
-        crateLoad.applyForceToDeck(this.nodes, this.beams);
+        crateLoad.applyForceToDeck(this.nodes);
       }
 
-      // 2. Verlet integration step
+      // 2. Integration step
       for (const node of this.nodes) {
-        if (node.fixed) {
-          node.x = node.anchorX;
-          node.y = node.anchorY;
-          node.vx = 0;
-          node.vy = 0;
-          continue;
-        }
+        if (node.fixed) continue;
 
         const ax = node.fx / node.mass;
         const ay = node.fy / node.mass;
 
-        // Velocity Verlet
         node.vx = (node.vx + ax * dtSub) * this.damping;
         node.vy = (node.vy + ay * dtSub) * this.damping;
 
@@ -207,7 +219,7 @@ export class PhysicsEngine {
         node.y += node.vy * dtSub;
       }
 
-      // 3. Distance constraint relaxation pass
+      // 3. Relaxation solver with Fire Degradation
       for (const beam of this.beams) {
         if (beam.broken) continue;
 
@@ -217,55 +229,65 @@ export class PhysicsEngine {
         const dx = nodeB.x - nodeA.x;
         const dy = nodeB.y - nodeA.y;
         const currentDist = Math.sqrt(dx * dx + dy * dy);
-
         if (currentDist === 0) continue;
 
         beam.currentLength = currentDist;
         const strain = Math.abs(currentDist - beam.restLength) / beam.restLength;
-        const stressLevel = strain / beam.material.maxStrength;
 
+        // Check if beam is inside Fire Zone
+        let effectiveMaxStrength = beam.material.maxStrength;
+        if (missionObj && missionObj.hasFireZone && missionObj.fireZone) {
+          const fz = missionObj.fireZone;
+          const midX = (nodeA.x + nodeB.x) / 2;
+          const midY = (nodeA.y + nodeB.y) / 2;
+          if (midX >= fz.x1 && midX <= fz.x2 && midY >= fz.y1 && midY <= fz.y2) {
+            beam.inFire = true;
+            effectiveMaxStrength *= fz.fireModifier; // Reduce strength in fire!
+          } else {
+            beam.inFire = false;
+          }
+        }
+
+        const stressLevel = strain / effectiveMaxStrength;
         beam.stress = stressLevel;
         beam.stressType = currentDist < beam.restLength ? 'compression' : 'tension';
 
-        // Check structural failure limit
+        // Check beam snapping
         if (stressLevel > 1.0 && this.isSimulating) {
           beam.broken = true;
           if (!this.failedBeamInfo) {
+            this.failedBeamObject = beam;
             this.failedBeamInfo = {
               beamId: beam.id,
               materialName: beam.material.name,
-              cause: beam.stressType === 'compression' ? 'Excessive Compression' : 'Excessive Tension',
-              stressVal: Math.round(stressLevel * 100)
+              cause: beam.inFire ? 'Fire Degradation & Compression' :
+                     (beam.stressType === 'compression' ? 'Excessive Compression' : 'Excessive Tension'),
+              stressVal: Math.round(stressLevel * 100),
+              strengthVal: Math.round(effectiveMaxStrength * 100)
             };
           }
-          if (this.onBeamBreak) {
-            this.onBeamBreak(beam);
-          }
+          if (this.onBeamBreak) this.onBeamBreak(beam);
           continue;
         }
 
-        // Constraint distance correction
+        // Distance correction
         const diff = (currentDist - beam.restLength) / currentDist;
         const correctionX = dx * diff * 0.5;
         const correctionY = dy * diff * 0.5;
 
         if (!nodeA.fixed && !nodeB.fixed) {
-          nodeA.x += correctionX;
-          nodeA.y += correctionY;
-          nodeB.x -= correctionX;
-          nodeB.y -= correctionY;
+          nodeA.x += correctionX; nodeA.y += correctionY;
+          nodeB.x -= correctionX; nodeB.y -= correctionY;
         } else if (!nodeA.fixed && nodeB.fixed) {
-          nodeA.x += correctionX * 2;
-          nodeA.y += correctionY * 2;
+          nodeA.x += correctionX * 2; nodeA.y += correctionY * 2;
         } else if (nodeA.fixed && !nodeB.fixed) {
-          nodeB.x -= correctionX * 2;
-          nodeB.y -= correctionY * 2;
+          nodeB.x -= correctionX * 2; nodeB.y -= correctionY * 2;
         }
       }
 
       // Re-enforce fixed anchors
       for (const node of this.nodes) {
-        if (node.fixed) {
+        if (node.fixed && (!missionObj || !missionObj.hasEarthquake)) {
           node.x = node.anchorX;
           node.y = node.anchorY;
         }
@@ -276,19 +298,14 @@ export class PhysicsEngine {
   getMaxStress() {
     let max = 0;
     for (const b of this.beams) {
-      if (!b.broken && b.stress > max) {
-        max = b.stress;
-      }
+      if (!b.broken && b.stress > max) max = b.stress;
     }
     return max;
   }
 
   isStructureCollapsed(waterY = 560) {
-    // Check if any non-fixed node dropped into abyss or water
     for (const node of this.nodes) {
-      if (!node.fixed && node.y > waterY - 20) {
-        return true;
-      }
+      if (!node.fixed && node.y > waterY - 20) return true;
     }
     return false;
   }
