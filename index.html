@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>After the Collapse — 2D Rescue Physics Puzzle</title>
+  <meta name="description" content="A 2D structural engineering rescue puzzle game. Build bridges and cantilever platforms to rescue survivors post-collapse.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="game-app">
+    <!-- TOP HUD BANNER -->
+    <header id="top-hud">
+      <div class="hud-brand">
+        <span class="hud-logo-icon">⚠️</span>
+        <div class="hud-title-group">
+          <h1>AFTER THE COLLAPSE</h1>
+          <span class="hud-subtitle">RESCUE ENGINEERING SYSTEM</span>
+        </div>
+      </div>
+
+      <div class="hud-mission-info">
+        <span class="hud-mission-badge" id="hud-mission-badge">MISSION 1</span>
+        <span class="hud-mission-title" id="hud-mission-title">Cross the Ravine</span>
+      </div>
+
+      <div class="hud-budget-bar">
+        <div class="budget-item wood" title="Wood Beams Remaining">
+          <span class="budget-icon">🪵</span>
+          <span class="budget-label">WOOD:</span>
+          <span class="budget-val" id="wood-budget-val">15</span>
+        </div>
+        <div class="budget-item steel" title="Steel Beams Remaining">
+          <span class="budget-icon">⚙️</span>
+          <span class="budget-label">STEEL:</span>
+          <span class="budget-val" id="steel-budget-val">5</span>
+        </div>
+        <div class="budget-item cost">
+          <span class="budget-label">COST:</span>
+          <span class="budget-val" id="total-cost-val">$0</span>
+        </div>
+      </div>
+
+      <div class="hud-controls">
+        <button id="btn-audio-toggle" class="btn-icon" title="Toggle Audio">🔊</button>
+        <button id="btn-help" class="btn-icon" title="Mission Briefing">❓</button>
+      </div>
+    </header>
+
+    <!-- MAIN GAME WORKSPACE -->
+    <main id="game-workspace">
+      <!-- CANVAS GAME WORLD -->
+      <div id="canvas-container">
+        <canvas id="game-canvas"></canvas>
+        <div id="wind-indicator" class="wind-overlay hidden">
+          <span class="wind-icon">💨</span>
+          <span class="wind-text" id="wind-speed-text">WIND: 35 KM/H</span>
+          <div class="wind-bar"><div class="wind-fill" id="wind-bar-fill"></div></div>
+        </div>
+        <div id="test-status-banner" class="status-overlay hidden">
+          <span id="test-status-text">SIMULATING STRUCTURAL LOAD...</span>
+          <div class="timer-radial" id="test-timer">0.0s</div>
+        </div>
+      </div>
+
+      <!-- BOTTOM TOOLBAR & OBJECTIVE -->
+      <footer id="bottom-hud">
+        <div class="tool-section">
+          <span class="section-label">CONSTRUCTION TOOLS</span>
+          <div class="tool-buttons">
+            <button id="tool-node" class="tool-btn active" data-tool="node">
+              <span class="tool-icon">⚪</span>
+              <span class="tool-name">NODE</span>
+              <span class="tool-key">[1]</span>
+            </button>
+            <button id="tool-wood" class="tool-btn" data-tool="wood">
+              <span class="tool-icon">🪵</span>
+              <span class="tool-name">WOOD BEAM</span>
+              <span class="tool-cost">$1</span>
+              <span class="tool-key">[2]</span>
+            </button>
+            <button id="tool-steel" class="tool-btn" data-tool="steel">
+              <span class="tool-icon">⚙️</span>
+              <span class="tool-name">STEEL BEAM</span>
+              <span class="tool-cost">$3</span>
+              <span class="tool-key">[3]</span>
+            </button>
+            <button id="tool-delete" class="tool-btn tool-danger" data-tool="delete">
+              <span class="tool-icon">🗑️</span>
+              <span class="tool-name">DELETE</span>
+              <span class="tool-key">[4]</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="objective-section">
+          <span class="section-label">CURRENT OBJECTIVE</span>
+          <p id="objective-text">Build a structure connecting the two cliffs that holds its own weight.</p>
+        </div>
+
+        <div class="action-section">
+          <div class="utility-btns">
+            <button id="btn-undo" class="btn-secondary" title="Undo last action">↩ UNDO</button>
+            <button id="btn-reset" class="btn-secondary" title="Reset all beams">🔄 RESET</button>
+            <button id="btn-auto-solve" class="btn-auto" title="Auto-build working structural solution">🤖 AUTO-SOLVE</button>
+          </div>
+          <button id="btn-test" class="btn-primary">
+            <span class="btn-test-icon">▶</span>
+            <span id="btn-test-text">TEST STRUCTURE</span>
+          </button>
+        </div>
+      </footer>
+    </main>
+
+    <!-- MODAL OVERLAYS -->
+    <!-- 1. MISSION BRIEFING MODAL -->
+    <div id="modal-briefing" class="modal-backdrop">
+      <div class="modal-card briefing-card">
+        <div class="modal-header">
+          <span class="modal-tag">RESCUE OPERATION BRIEFING</span>
+          <h2 id="briefing-mission-title">MISSION 1 — Cross the Ravine</h2>
+        </div>
+        <div class="modal-body">
+          <div class="briefing-story">
+            <div class="story-avatar">👷‍♂️</div>
+            <p id="briefing-story-text">The main supply bridge was destroyed in the collapse. Settlement Alpha across the ravine is isolated without food or water. Build a sturdy temporary crossing connecting both cliffs.</p>
+          </div>
+          <div class="briefing-specs">
+            <h3>OPERATIONAL CONSTRAINTS</h3>
+            <ul>
+              <li><strong>Gap Distance:</strong> <span id="briefing-gap-val">350 meters</span></li>
+              <li><strong>Load Requirement:</strong> <span id="briefing-load-val">Structural Self-Weight</span></li>
+              <li><strong>Budget Limit:</strong> <span id="briefing-budget-val">15 Wood, 5 Steel</span></li>
+              <li><strong>Environmental Hazards:</strong> <span id="briefing-hazard-val">None</span></li>
+            </ul>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-start-mission" class="btn-primary btn-large">BEGIN CONSTRUCTION ▶</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. FAILURE DIAGNOSTIC MODAL -->
+    <div id="modal-failure" class="modal-backdrop hidden">
+      <div class="modal-card failure-card">
+        <div class="modal-header danger-header">
+          <span class="modal-tag">SYSTEM ALERT</span>
+          <h2>STRUCTURAL FAILURE DETECTED</h2>
+        </div>
+        <div class="modal-body">
+          <div class="diagnostic-box">
+            <div class="diag-icon">💥</div>
+            <div class="diag-content">
+              <h3 id="fail-cause-title">Beam #4 Failed Under Excessive Stress</h3>
+              <p id="fail-cause-desc">The beam experienced excessive compression forces beyond its structural material limit, triggering a chain-reaction collapse.</p>
+            </div>
+          </div>
+
+          <div class="advice-box">
+            <span class="advice-tag">💡 RESCUE ENGINEER ADVICE</span>
+            <p id="fail-advice-text">Add triangular truss supports or switch critical high-compression beams from Wood to Steel.</p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-retry-mission" class="btn-secondary btn-large">🔄 RESET & RETRY</button>
+          <button id="btn-edit-structure" class="btn-primary btn-large">🛠️ EDIT STRUCTURE</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. SUCCESS MODAL -->
+    <div id="modal-success" class="modal-backdrop hidden">
+      <div class="modal-card success-card">
+        <div class="modal-header success-header">
+          <span class="modal-tag">OPERATION SUCCESSFUL</span>
+          <h2>MISSION COMPLETE</h2>
+        </div>
+        <div class="modal-body">
+          <div class="success-box">
+            <div class="success-icon">🎉</div>
+            <div class="success-content">
+              <h3 id="success-headline">Structure Held Strong!</h3>
+              <p id="success-desc">The bridge successfully supported the required loads and re-established life-saving connection to Settlement Alpha.</p>
+            </div>
+          </div>
+
+          <div class="stats-grid">
+            <div class="stat-card">
+              <span class="stat-label">Material Efficiency</span>
+              <span class="stat-val" id="stat-efficiency">85%</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Max Strain Level</span>
+              <span class="stat-val" id="stat-max-strain">42%</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Total Cost</span>
+              <span class="stat-val" id="stat-total-cost">$12</span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-next-mission" class="btn-primary btn-large">NEXT MISSION ▶</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. CAMPAIGN COMPLETE MODAL -->
+    <div id="modal-victory" class="modal-backdrop hidden">
+      <div class="modal-card victory-card">
+        <div class="modal-header gold-header">
+          <span class="modal-tag">HERO OF THE COLLAPSE</span>
+          <h2>ALL SETTLEMENTS RESCUED!</h2>
+        </div>
+        <div class="modal-body">
+          <p class="victory-text">Through exceptional structural engineering, you built resilient bridges, cantilever platforms, and storm-proof rescue lines. All isolated populations have been safely evacuated!</p>
+          <div class="victory-medal">🏆</div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-restart-game" class="btn-primary btn-large">PLAY AGAIN 🔄</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
